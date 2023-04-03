@@ -73,7 +73,7 @@ impl ChipEight {
         let mut memory: [u8; 4096] = [0; 4096];
         for (i, sprite) in sprites.iter().enumerate() {
             for (j, byte) in sprite.iter().enumerate() {
-                let current_sprite = i * sprite.len();
+                let current_sprite: usize = i * sprite.len();
                 memory[current_sprite + j] = *byte;
             }
         }
@@ -82,10 +82,10 @@ impl ChipEight {
     pub fn load_program(&mut self, program: Vec<u8>) {
         use std::collections::VecDeque;
 
-        let mut prog_queue = VecDeque::from(program);
-        let mut mem_idx = 0x200 as usize;
+        let mut prog_queue: VecDeque<u8> = VecDeque::from(program);
+        let mut mem_idx: usize = 0x200;
         while prog_queue.len() != 0 {
-            let byte = match prog_queue.pop_front() {
+            let byte: u8 = match prog_queue.pop_front() {
                 Some(b) => b,
                 None => 0,
             };
@@ -93,33 +93,115 @@ impl ChipEight {
             self.memory[mem_idx] = byte;
             mem_idx += 1;
         }
-        // Hard code option for the Chip-8 Test Rom because input is unfinished
-        self.memory[0x1FE] = 1;
-        self.memory[0x1FF] = 5;
     }
-    // TODO: Replace this with an actual rendering library like SDL or something
-    pub fn run(&mut self) {
-        use std::{thread, time};
-        let sixty_hz = time::Duration::from_micros(1000000 / 60);
+    pub fn run(&mut self, mut canvas: sdl2::render::Canvas<sdl2::video::Window>, sdl_context: sdl2::Sdl) {
+        use sdl2::{event::Event, keyboard::Keycode, pixels::Color, rect::Rect};
 
-        loop {
-            for row in self.screen {
-                for pixel in row {
-                    print!("{}", if pixel { '█' } else { ' ' });
+        canvas.set_draw_color(Color::RGB(0, 0, 0));
+        match canvas.set_logical_size(64, 32) {
+            Ok(_) => {},
+            Err(e) => panic!("Error setting canvas logical size: {:?}", e),
+        };
+        canvas.clear();
+        canvas.present();
+
+        let mut event_pump = match sdl_context.event_pump() {
+            Ok(pump) => pump,
+            Err(e) => panic!("Error creating sdl context event pump: {:?}", e),
+        };
+
+        let mut pressed: u8 = 0x10;
+        'running: loop {
+            for (y, row) in self.screen.iter().enumerate() {
+                for (x, pixel) in row.iter().enumerate() {
+                    let rect = Rect::new(x as i32, y as i32, 1, 1);
+                    if *pixel {
+                        canvas.set_draw_color(Color::RGB(255, 255, 255));
+                    } else {
+                        canvas.set_draw_color(Color::RGB(0, 0, 0));
+                    }
+                    match canvas.draw_rect(rect) {
+                        Ok(_) => {}
+                        Err(e) => println!("Error drawing rectangle at ({}, {}): {:?}", x, y, e),
+                    };
                 }
-                println!();
             }
-            // Clear the terminal screen
-            print!("\x1B[2J\x1B[1;1H");
+            for event in event_pump.poll_iter() {
+                match event {
+                    Event::Quit { .. }
+                    | Event::KeyDown {
+                        keycode: Some(Keycode::Escape),
+                        ..
+                    } => break 'running,
+                    Event::KeyDown {
+                        keycode: Some(keycode),
+                        ..
+                    } => match keycode {
+                        Keycode::Num1 => {
+                            pressed = 0x1;
+                        }
+                        Keycode::Num2 => {
+                            pressed = 0x2;
+                        }
+                        Keycode::Num3 => {
+                            pressed = 0x3;
+                        }
+                        Keycode::Num4 => {
+                            pressed = 0xC;
+                        }
+                        Keycode::Q => {
+                            pressed = 0x4;
+                        }
+                        Keycode::W => {
+                            pressed = 0x5;
+                        }
+                        Keycode::E => {
+                            pressed = 0x6;
+                        }
+                        Keycode::R => {
+                            pressed = 0xD;
+                        }
+                        Keycode::A => {
+                            pressed = 0x7;
+                        }
+                        Keycode::S => {
+                            pressed = 0x8;
+                        }
+                        Keycode::D => {
+                            pressed = 0x9;
+                        }
+                        Keycode::F => {
+                            pressed = 0xE;
+                        }
+                        Keycode::Z => {
+                            pressed = 0xA;
+                        }
+                        Keycode::X => {
+                            pressed = 0x0;
+                        }
+                        Keycode::C => {
+                            pressed = 0xB;
+                        }
+                        Keycode::V => {
+                            pressed = 0xF;
+                        }
+                        _ => {}
+                    },
+                    Event::KeyUp {..} => {
+                        pressed = 0x10;
+                    }
+                    _ => {}
+                }
+            }
 
             let instruction: u16 = (self.memory[self.pc as usize] as u16) << 8
                 | self.memory[(self.pc + 1) as usize] as u16;
 
-            self.execute(instruction);
-            thread::sleep(sixty_hz);
+            self.execute(instruction, pressed);
+            canvas.present();
         }
     }
-    fn execute(&mut self, instruction: u16) {
+    fn execute(&mut self, instruction: u16, pressed: u8) {
         let top_nybble: u16 = instruction >> 12;
         let bottom_byte: u16 = instruction & 0x00FF;
         let bottom_nybble: u16 = instruction & 0x000F;
@@ -158,13 +240,13 @@ impl ChipEight {
             0xC => self.rnd_vx_kk(instruction),
             0xD => self.drw_vx_vy_n(instruction),
             0xE => match bottom_byte {
-                0x9E => self.skp_vx(instruction),
-                0xA1 => self.sknp_vx(instruction),
+                0x9E => self.skp_vx(instruction, pressed),
+                0xA1 => self.sknp_vx(instruction, pressed),
                 _ => panic!("Invalid instruction {:#04x} encountered.", instruction),
             },
             0xF => match bottom_byte {
                 0x07 => self.ld_vx_dt(instruction),
-                0x0A => self.ld_vx_key(instruction),
+                0x0A => self.ld_vx_key(instruction, pressed),
                 0x15 => self.ld_dt_vx(instruction),
                 0x18 => self.ld_st_vx(instruction),
                 0x1E => self.add_i_vx(instruction),
@@ -331,7 +413,7 @@ impl ChipEight {
         let _y: usize = ((instruction & 0x00F0) >> 4) as usize; // Specified in the documentation but I'm pretty sure this is unused
         let f: usize = 0xF;
         let prev: u8 = self.gp_registers[x];
-        
+
         self.gp_registers[x] >>= 1;
 
         if prev & 0x0001 == 1 {
@@ -453,14 +535,25 @@ impl ChipEight {
         self.pc += 2;
     }
     // Ex9E - Skip next instruction if key with the value of Vx is pressed.
-    fn skp_vx(&mut self, instruction: u16) {
-        // TODO: Implement keypad. For now, act as if no keys are ever pressed.
-        self.pc += 2;
+    fn skp_vx(&mut self, instruction: u16, pressed: u8) {
+        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
+
+        //println!("pressed = {}", pressed);
+        if self.gp_registers[x] == pressed {
+            self.pc += 4;
+        } else {
+            self.pc += 2;
+        }
     }
     // ExA1 - Skip next instruction if key with the value of Vx is not pressed.
-    fn sknp_vx(&mut self, instruction: u16) {
-        // TODO: Implement keypad. For now, act as if no keys are ever pressed.
-        self.pc += 4;
+    fn sknp_vx(&mut self, instruction: u16, pressed: u8) {
+        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
+
+        if self.gp_registers[x] != pressed {
+            self.pc += 4;
+        } else {
+            self.pc += 2;
+        }
     }
     // Fx07 - Set Vx = delay_timer.
     fn ld_vx_dt(&mut self, instruction: u16) {
@@ -470,12 +563,13 @@ impl ChipEight {
         self.pc += 2;
     }
     // Fx0A - Wait for a key press, then store the value of the key in Vx.
-    fn ld_vx_key(&mut self, instruction: u16) {
-        // TODO: Implement keypad. For now, just set Vx to 0.
+    fn ld_vx_key(&mut self, instruction: u16, pressed: u8) {
         let x: usize = ((instruction & 0x0F00) >> 8) as usize;
 
-        self.gp_registers[x] = 0;
-        self.pc += 2;
+        if pressed != 0x10 {
+            self.gp_registers[x] = pressed;
+            self.pc += 2;
+        }
     }
     // Fx15 - Set delay_timer = Vx.
     fn ld_dt_vx(&mut self, instruction: u16) {

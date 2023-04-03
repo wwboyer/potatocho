@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 rand = "0.8.5"
 rfd = "0.11.2"
+sdl2 = "0.35.2"
 
 [profile.dev]
 overflow-checks = false
