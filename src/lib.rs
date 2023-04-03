@@ -1,3 +1,26 @@
+use sdl2::audio::{AudioCallback, AudioSpecDesired};
+
+struct SquareWave {
+    phase_inc: f32,
+    phase: f32,
+    volume: f32,
+}
+
+impl AudioCallback for SquareWave {
+    type Channel = f32;
+
+    fn callback(&mut self, out: &mut [f32]) {
+        for x in out.iter_mut() {
+            *x = if self.phase <= 0.5 {
+                self.volume
+            } else {
+                -self.volume
+            };
+            self.phase = (self.phase + self.phase_inc) % 1.0;
+        }
+    }
+}
+
 pub struct ChipEight {
     // Chip-8 has access to 4KiB RAM. Most programs start at 0x200, as bytes 0x000 to 0x1FF are reserved for the interpreter.
     memory: [u8; 4096],
@@ -94,12 +117,43 @@ impl ChipEight {
             mem_idx += 1;
         }
     }
-    pub fn run(&mut self, mut canvas: sdl2::render::Canvas<sdl2::video::Window>, sdl_context: sdl2::Sdl) {
+    pub fn run(
+        &mut self,
+        mut canvas: sdl2::render::Canvas<sdl2::video::Window>,
+        sdl_context: sdl2::Sdl,
+    ) {
         use sdl2::{event::Event, keyboard::Keycode, pixels::Color, rect::Rect};
+
+        let audio_subsystem = match sdl_context.audio() {
+            Ok(audio) => {
+                println!("Created sdl audio!");
+                audio
+            }
+            Err(e) => panic!("Error creating sdl audiocontext: {:?}", e),
+        };
+
+        let desired_spec = AudioSpecDesired {
+            freq: Some(44100),
+            channels: Some(1),
+            samples: None,
+        };
+
+        let audio_device =
+            match audio_subsystem.open_playback(None, &desired_spec, |spec| SquareWave {
+                phase_inc: 261.63 / spec.freq as f32, // C note
+                phase: 0.0,
+                volume: 0.0625,
+            }) {
+                Ok(audio) => {
+                    println!("Initialized audio device with a square wave!");
+                    audio
+                }
+                Err(e) => panic!("Error initializing audio device: {:?}", e),
+            };
 
         canvas.set_draw_color(Color::RGB(0, 0, 0));
         match canvas.set_logical_size(64, 32) {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => panic!("Error setting canvas logical size: {:?}", e),
         };
         canvas.clear();
@@ -187,7 +241,7 @@ impl ChipEight {
                         }
                         _ => {}
                     },
-                    Event::KeyUp {..} => {
+                    Event::KeyUp { .. } => {
                         pressed = 0x10;
                     }
                     _ => {}
@@ -196,6 +250,20 @@ impl ChipEight {
 
             let instruction: u16 = (self.memory[self.pc as usize] as u16) << 8
                 | self.memory[(self.pc + 1) as usize] as u16;
+
+            self.sound_timer = if self.sound_timer > 0 {
+                audio_device.resume();
+                self.sound_timer - 1
+            } else {
+                audio_device.pause();
+                0
+            };
+
+            self.delay_timer = if self.delay_timer > 0 {
+                self.delay_timer - 1
+            } else {
+                0
+            };
 
             self.execute(instruction, pressed);
             canvas.present();
