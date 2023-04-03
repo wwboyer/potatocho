@@ -6,32 +6,31 @@ PotatOcho is a my work-in-progress Chip-8 emulator coded in Rust. I decided to m
 
 ### How far along is it?
 
-Right now, PotatOcho simply prints a 64x32 image directly to the terminal, and clears the screen at a rate of 60Hz. Obviously, this is neither perfect nor desirable, and I'm looking into using an actual rendering library like SDL (which would also take care of input), but for just testing instructions it works okay.
+PotatOcho utilizes SDL to render at an internal resolution of 64x32 to a window with a resolution of 1280x640, as well as to accept keypad input.
 
 For testing compatibility, I'm using [Timendus's amazing *Chip8 Test Suite*](https://github.com/Timendus/chip8-test-suite). Seriously, without this, testing would be so much more annoying than it already is.
 
 ### Current Test Results:
-###### Note: The white block seen in the bottom left corner of the images is just the terminal cursor. It is *not* being erroneously drawn by PotatOcho. When I switch to an actual rendering library, it'll disappear.
 
 #### Test 1: IBM Logo
 
-![Image displaying the IBM logo.](https://i.imgur.com/bOKwIXo.png)
+![Image displaying the IBM logo.](https://i.imgur.com/HNssGy4.png)
 
 #### Test 2: Corax89's Opcode Test
 
-![Image displaying the results of the Corax89 Opcode Test. All tested opcodes pass.](https://i.imgur.com/zTOsnTa.png)
+![Image displaying the results of the Corax89 Opcode Test. All tested opcodes pass.](https://i.imgur.com/GQZlV28.png)
 
 #### Test 3: Flags
 
-![Image displaying the results of the Flags Test. All tested flags are OK.](https://i.imgur.com/yCNNY0T.png)
+![Image displaying the results of the Flags Test. All tested flags are OK.](https://i.imgur.com/gacmO9W.png)
 
 #### Test 4: Quirks (Chip-8 Test Only)
 
-![Image displaying the results of the Quirks test. Only a single square is drawn.](https://i.imgur.com/Bas3HjF.png)
+![Image displaying the results of the Quirks test. Only a single square is drawn.](https://i.imgur.com/Lw4hMLF.png)
 
 #### Test 5: Keypad
 
-![Image displaying the results of the Keypad test. It only shows a keypad because input hasn't been implemented yet.](https://i.imgur.com/LekCxk1.png)
+![Image displaying the results of the Keypad test.](https://i.imgur.com/cPjAhfN.png)
 
 ### Credits
 
