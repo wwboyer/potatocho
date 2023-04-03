@@ -26,7 +26,7 @@ For testing compatibility, I'm using [Timendus's amazing *Chip8 Test Suite*](htt
 
 #### Test 4: Quirks (Chip-8 Test Only)
 
-![Image displaying the results of the Quirks test. Only a single square is drawn.](https://i.imgur.com/Lw4hMLF.png)
+![Image displaying the results of the Quirks test.](https://i.imgur.com/vntv2Wc.png)
 
 #### Test 5: Keypad
 
