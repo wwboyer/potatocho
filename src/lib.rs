@@ -1,5 +1,6 @@
 use sdl2::audio::{AudioCallback, AudioSpecDesired};
 
+// The audio code is pretty much lifted 1:1 from the SDL2 crate's audio example code: https://rust-sdl2.github.io/rust-sdl2/sdl2/audio/index.html
 struct SquareWave {
     phase_inc: f32,
     phase: f32,
@@ -29,7 +30,7 @@ pub struct ChipEight {
     // Chip-8 has a stack that can store up to 16 addresses that the interpreter should return to when a subroutine has finished executing.
     stack: Vec<u16>,
     // Chip-8 has 16 general-purpose 8-bit registers V0 - VF, although VF is used as a flag by some instructions and should not be used by programs.
-    gp_registers: [u8; 16],
+    v_registers: [u8; 16],
     // The following are special registers that are separated distinctly from the general-purpose registers
     // The program counter is a 16-bit register that stores the currently executing address
     pc: u16,
@@ -37,7 +38,9 @@ pub struct ChipEight {
     sp: u8,
     // The I register stores memory addresses. Since there's only 4KiB (0xFFF) RAM, only the lowest 12 bits are used.
     i_register: u16,
+    // When greater than 0, the delay timer will decrement by 1 every cycle
     delay_timer: u8,
+    // When greater than 0, the sound timer will decrement by 1 every cycle and play a tone (in this case, a square wave middle C note)
     sound_timer: u8,
 }
 
@@ -84,7 +87,7 @@ impl ChipEight {
             memory: Self::init_memory(SPRITES),
             screen: [[false; 64]; 32],
             stack: Vec::<u16>::with_capacity(16),
-            gp_registers: [0; 16],
+            v_registers: [0; 16],
             pc: 0x200,
             sp: 0,
             i_register: 0,
@@ -140,7 +143,7 @@ impl ChipEight {
 
         let audio_device =
             match audio_subsystem.open_playback(None, &desired_spec, |spec| SquareWave {
-                phase_inc: 261.63 / spec.freq as f32, // C note
+                phase_inc: 261.63 / spec.freq as f32, // middle C note
                 phase: 0.0,
                 volume: 0.0625,
             }) {
@@ -271,57 +274,59 @@ impl ChipEight {
     }
     fn execute(&mut self, instruction: u16, pressed: u8) {
         let top_nybble: u16 = instruction >> 12;
-        let bottom_byte: u16 = instruction & 0x00FF;
+        // These are usize because the second and third nybbles are pretty much exclusively used to access registers Vx and Vy respectively
+        let second_nybble: usize = ((instruction & 0x0F00) >> 8) as usize;
+        let third_nybble: usize = ((instruction & 0x00F0) >> 4) as usize;
         let bottom_nybble: u16 = instruction & 0x000F;
 
-        // println!("Current instruction: {:#04x}", instruction);
-        // println!("Current pc: {:#04x}", self.pc);
+        let bottom_byte: u8 = (instruction & 0x00FF) as u8;
+        let bottom_three_nybbles: u16 = instruction & 0x0FFF;
 
         match top_nybble {
             0x0 => match bottom_byte {
-                0xE0 => self.cls(instruction),
-                0xEE => self.ret(instruction),
-                _ => self.sys(instruction),
+                0xE0 => self.clear_screen(),
+                0xEE => self.return_from_subroutine(),
+                _ => self.jump_to_machine_code(),
             },
-            0x1 => self.jmp(instruction),
-            0x2 => self.call(instruction),
-            0x3 => self.se_vx_kk(instruction),
-            0x4 => self.sne_vx_kk(instruction),
-            0x5 => self.se_vx_vy(instruction),
-            0x6 => self.ld_vx_kk(instruction),
-            0x7 => self.add_vx_kk(instruction),
+            0x1 => self.jump_to_address(bottom_three_nybbles),
+            0x2 => self.call_subroutine_at_address(bottom_three_nybbles),
+            0x3 => self.skip_if_vx_equals_data(second_nybble, bottom_byte),
+            0x4 => self.skip_if_vx_not_equals_data(second_nybble, bottom_byte),
+            0x5 => self.skip_if_vx_equals_vy(second_nybble, third_nybble),
+            0x6 => self.set_vx_equals_data(second_nybble, bottom_byte),
+            0x7 => self.add_assign_data_to_vx(second_nybble, bottom_byte),
             0x8 => match bottom_nybble {
-                0x0 => self.ld_vx_vy(instruction),
-                0x1 => self.or_vx_vy(instruction),
-                0x2 => self.and_vx_vy(instruction),
-                0x3 => self.xor_vx_vy(instruction),
-                0x4 => self.add_vx_vy(instruction),
-                0x5 => self.sub_vx_vy(instruction),
-                0x6 => self.shr_vx_vy(instruction),
-                0x7 => self.subn_vx_vy(instruction),
-                0xE => self.shl_vx_vy(instruction),
+                0x0 => self.set_vx_equals_vy(second_nybble, third_nybble),
+                0x1 => self.bitor_assign_vy_to_vx(second_nybble, third_nybble),
+                0x2 => self.bitand_assign_vy_to_vx(second_nybble, third_nybble),
+                0x3 => self.bitxor_assign_vy_to_vx(second_nybble, third_nybble),
+                0x4 => self.add_assign_vy_to_vx(second_nybble, third_nybble),
+                0x5 => self.sub_assign_vy_to_vx(second_nybble, third_nybble),
+                0x6 => self.shift_right_vx(second_nybble, third_nybble),
+                0x7 => self.sub_vx_from_vy(second_nybble, third_nybble),
+                0xE => self.shift_left_vx(second_nybble, third_nybble),
                 _ => panic!("Invalid instruction {:#04x} encountered.", instruction),
             },
-            0x9 => self.sne_vx_vy(instruction),
-            0xA => self.ld_i_nnn(instruction),
-            0xB => self.jmp_v0_nnn(instruction),
-            0xC => self.rnd_vx_kk(instruction),
-            0xD => self.drw_vx_vy_n(instruction),
+            0x9 => self.skip_if_vx_not_equals_vy(second_nybble, third_nybble),
+            0xA => self.set_i_to_address(bottom_three_nybbles),
+            0xB => self.jump_to_address_plus_v0(bottom_three_nybbles),
+            0xC => self.set_vx_equals_rand(second_nybble, bottom_byte),
+            0xD => self.draw_n_bytes_at_xy(second_nybble, third_nybble, bottom_nybble),
             0xE => match bottom_byte {
-                0x9E => self.skp_vx(instruction, pressed),
-                0xA1 => self.sknp_vx(instruction, pressed),
+                0x9E => self.skip_if_vx_pressed(second_nybble, pressed),
+                0xA1 => self.skip_if_vx_not_pressed(second_nybble, pressed),
                 _ => panic!("Invalid instruction {:#04x} encountered.", instruction),
             },
             0xF => match bottom_byte {
-                0x07 => self.ld_vx_dt(instruction),
-                0x0A => self.ld_vx_key(instruction, pressed),
-                0x15 => self.ld_dt_vx(instruction),
-                0x18 => self.ld_st_vx(instruction),
-                0x1E => self.add_i_vx(instruction),
-                0x29 => self.ld_f_vx(instruction),
-                0x33 => self.ld_b_vx(instruction),
-                0x55 => self.ld_i_vx(instruction),
-                0x65 => self.ld_vx_i(instruction),
+                0x07 => self.set_vx_equals_delay(second_nybble),
+                0x0A => self.set_vx_equals_key(second_nybble, pressed),
+                0x15 => self.set_delay_equals_vx(second_nybble),
+                0x18 => self.set_sound_equals_vx(second_nybble),
+                0x1E => self.add_assign_vx_to_i(second_nybble),
+                0x29 => self.set_i_to_sprite(second_nybble),
+                0x33 => self.set_i_to_bcd(second_nybble),
+                0x55 => self.store_v_registers(second_nybble),
+                0x65 => self.restore_v_registers(second_nybble),
                 _ => panic!("Invalid instruction {:#04x} encountered.", instruction),
             },
             _ => unreachable!(
@@ -331,17 +336,17 @@ impl ChipEight {
     }
     // The following functions have very ugly names. They're named after the actual instruction + parameters. Sorry.
     // 0nnn - Jumps to machine code routine at address nnn. Ignored by modern interpreters
-    fn sys(&mut self, _instruction: u16) {
+    fn jump_to_machine_code(&mut self) {
         // Do nothing
         self.pc += 2;
     }
     // 00E0 - Clears the display
-    fn cls(&mut self, _instruction: u16) {
+    fn clear_screen(&mut self) {
         self.screen = [[false; 64]; 32];
         self.pc += 2;
     }
     // 00EE - Returns from a subroutine. Sets program counter to address at the top of the stack and subtracts 1 from the stack pointer
-    fn ret(&mut self, _instruction: u16) {
+    fn return_from_subroutine(&mut self) {
         self.pc = match self.stack.last() {
             Some(val) => *val,
             None => panic!(),
@@ -351,219 +356,149 @@ impl ChipEight {
         self.pc += 2;
     }
     // 1nnn - Jumps to address nnn. Sets program counter equal to nnn.
-    fn jmp(&mut self, instruction: u16) {
-        self.pc = instruction & 0x0FFF;
+    fn jump_to_address(&mut self, address: u16) {
+        self.pc = address;
     }
     // 2nnn - Calls subroutine at nnn. Increments the stack pointer, puts the current program counter on top of the stack, then sets the program counter to nnn.
-    fn call(&mut self, instruction: u16) {
-        let nnn = instruction & 0x0FFF;
+    fn call_subroutine_at_address(&mut self, address: u16) {
         self.stack.push(self.pc);
         self.sp += 1;
-        self.pc = nnn;
+        self.pc = address;
     }
     // 3xkk - Skips the next instruction if Vx == kk. Increments the program counter by 2.
-    fn se_vx_kk(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-        let kk: u8 = (instruction & 0x00FF) as u8;
-
-        if self.gp_registers[x] == kk {
-            self.pc += 4;
-        } else {
-            self.pc += 2;
-        }
+    fn skip_if_vx_equals_data(&mut self, x: usize, data: u8) {
+        self.pc += if self.v_registers[x] == data { 4 } else { 2 };
     }
     // 4xkk - Skips the next instruction if Vx != kk. Increments the program counter by 2.
-    fn sne_vx_kk(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-        let kk: u8 = (instruction & 0x00FF) as u8;
-
-        if self.gp_registers[x] != kk {
-            self.pc += 4;
-        } else {
-            self.pc += 2;
-        }
+    fn skip_if_vx_not_equals_data(&mut self, x: usize, data: u8) {
+        self.pc += if self.v_registers[x] != data { 4 } else { 2 };
     }
     // 5xy0 - Skips the next instruction if Vx == Vy. Increments the program counter by 2.
-    fn se_vx_vy(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-        let y: usize = ((instruction & 0x00F0) >> 4) as usize;
-
-        if self.gp_registers[x] == self.gp_registers[y] {
-            self.pc += 4;
+    fn skip_if_vx_equals_vy(&mut self, x: usize, y: usize) {
+        self.pc += if self.v_registers[x] == self.v_registers[y] {
+            4
         } else {
-            self.pc += 2;
-        }
+            2
+        };
     }
     // 6xkk - Sets Vx = kk.
-    fn ld_vx_kk(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-        let kk: u8 = (instruction & 0x00FF) as u8;
-
-        self.gp_registers[x] = kk;
+    fn set_vx_equals_data(&mut self, x: usize, data: u8) {
+        self.v_registers[x] = data;
         self.pc += 2;
     }
     // 7xkk - Sets Vx = Vx + kk.
-    fn add_vx_kk(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-        let kk: u8 = (instruction & 0x00FF) as u8;
-
-        self.gp_registers[x] += kk;
+    fn add_assign_data_to_vx(&mut self, x: usize, data: u8) {
+        self.v_registers[x] += data;
         self.pc += 2;
     }
     // 8xy0 - Sets Vx = Vy.
-    fn ld_vx_vy(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-        let y: usize = ((instruction & 0x00F0) >> 4) as usize;
-
-        self.gp_registers[x] = self.gp_registers[y];
+    fn set_vx_equals_vy(&mut self, x: usize, y: usize) {
+        self.v_registers[x] = self.v_registers[y];
         self.pc += 2;
     }
     // 8xy1 - Sets Vx = Vx | Vy.
-    fn or_vx_vy(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-        let y: usize = ((instruction & 0x00F0) >> 4) as usize;
-
-        self.gp_registers[x] |= self.gp_registers[y];
+    fn bitor_assign_vy_to_vx(&mut self, x: usize, y: usize) {
+        self.v_registers[x] |= self.v_registers[y];
         self.pc += 2;
     }
     // 8xy2 - Sets Vx = Vx & Vy.
-    fn and_vx_vy(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-        let y: usize = ((instruction & 0x00F0) >> 4) as usize;
-
-        self.gp_registers[x] &= self.gp_registers[y];
+    fn bitand_assign_vy_to_vx(&mut self, x: usize, y: usize) {
+        self.v_registers[x] &= self.v_registers[y];
         self.pc += 2;
     }
     // 8xy3 - Sets Vx = Vx ^ Vy.
-    fn xor_vx_vy(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-        let y: usize = ((instruction & 0x00F0) >> 4) as usize;
-
-        self.gp_registers[x] ^= self.gp_registers[y];
+    fn bitxor_assign_vy_to_vx(&mut self, x: usize, y: usize) {
+        self.v_registers[x] ^= self.v_registers[y];
         self.pc += 2;
     }
     // 8xy4 - Sets Vx = Vx + Vy. Also sets VF = 1 if a carry flag is needed.
-    fn add_vx_vy(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-        let y: usize = ((instruction & 0x00F0) >> 4) as usize;
+    fn add_assign_vy_to_vx(&mut self, x: usize, y: usize) {
         let f: usize = 0xF;
+        let sum: u16 = self.v_registers[x] as u16 + self.v_registers[y] as u16;
 
-        let sum: u16 = self.gp_registers[x] as u16 + self.gp_registers[y] as u16;
-
-        if sum > 255 {
-            self.gp_registers[f] = 1;
-        } else {
-            self.gp_registers[f] = 0;
-        }
+        self.v_registers[f] = if sum > 255 { 1 } else { 0 };
         // We only need the lower byte, so just mask it.
-        self.gp_registers[x] = (sum & 0x00FF) as u8;
+        self.v_registers[x] = (sum & 0x00FF) as u8;
         self.pc += 2;
     }
     // 8xy5 - Sets Vx = Vx - Vy. If Vx > Vy, set VF to 1, otherwise set VF to 0.
-    fn sub_vx_vy(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-        let y: usize = ((instruction & 0x00F0) >> 4) as usize;
+    fn sub_assign_vy_to_vx(&mut self, x: usize, y: usize) {
         let f: usize = 0xF;
 
-        self.gp_registers[x] -= self.gp_registers[y];
+        self.v_registers[x] -= self.v_registers[y];
 
-        if self.gp_registers[x] > self.gp_registers[y] {
-            self.gp_registers[f] = 1;
+        self.v_registers[f] = if self.v_registers[x] > self.v_registers[y] {
+            1
         } else {
-            self.gp_registers[f] = 0;
-        }
+            0
+        };
 
         self.pc += 2;
     }
     // 8xy6 - Sets Vx = Vx >> 1 (equivalent to Vx / 2). If the least significant bit of Vx == 1, set VF = 1.
-    fn shr_vx_vy(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-        let _y: usize = ((instruction & 0x00F0) >> 4) as usize; // Specified in the documentation but I'm pretty sure this is unused
+    fn shift_right_vx(&mut self, x: usize, _y: usize) {
         let f: usize = 0xF;
-        let prev: u8 = self.gp_registers[x];
+        let prev: u8 = self.v_registers[x] & 0x0001;
 
-        self.gp_registers[x] >>= 1;
+        self.v_registers[x] >>= 1;
 
-        if prev & 0x0001 == 1 {
-            self.gp_registers[f] = 1;
-        } else {
-            self.gp_registers[f] = 0;
-        }
+        self.v_registers[f] = if prev == 1 { 1 } else { 0 };
 
         self.pc += 2;
     }
     // 8xy7 - Sets Vx = Vy - Vx. If Vy > Vx, set VF to 1, otherwise set VF to 0.
-    fn subn_vx_vy(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-        let y: usize = ((instruction & 0x00F0) >> 4) as usize;
+    fn sub_vx_from_vy(&mut self, x: usize, y: usize) {
         let f: usize = 0xF;
 
-        self.gp_registers[x] = self.gp_registers[y] - self.gp_registers[x];
+        self.v_registers[x] = self.v_registers[y] - self.v_registers[x];
 
-        if self.gp_registers[y] > self.gp_registers[x] {
-            self.gp_registers[f] = 1;
+        self.v_registers[f] = if self.v_registers[y] > self.v_registers[x] {
+            1
         } else {
-            self.gp_registers[f] = 0;
-        }
+            0
+        };
 
         self.pc += 2;
     }
     // 8xyE - Sets Vx = Vx << 1 (Equivalent to Vx * 2). If the most significant bit of Vx == 1, set VF = 1.
-    fn shl_vx_vy(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-        let _y: usize = ((instruction & 0x00F0) >> 4) as usize; // Again, the third nybble is specified but I'm pretty sure it's unused
+    fn shift_left_vx(&mut self, x: usize, _y: usize) {
         let f: usize = 0xF;
-        let prev: u8 = self.gp_registers[x];
+        let prev: u8 = self.v_registers[x] & 0x80;
 
-        self.gp_registers[x] <<= 1;
+        self.v_registers[x] <<= 1;
 
-        if prev & 0x80 != 0 {
-            self.gp_registers[f] = 1;
-        } else {
-            self.gp_registers[f] = 0;
-        }
+        self.v_registers[f] = if prev != 0 { 1 } else { 0 };
 
         self.pc += 2;
     }
     // 9xy0 - Skips the next instruction if Vx != Vy.
-    fn sne_vx_vy(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-        let y: usize = ((instruction & 0x00F0) >> 4) as usize;
-
-        if self.gp_registers[x] != self.gp_registers[y] {
-            self.pc += 4;
+    fn skip_if_vx_not_equals_vy(&mut self, x: usize, y: usize) {
+        self.pc += if self.v_registers[x] != self.v_registers[y] {
+            4
         } else {
-            self.pc += 2;
-        }
+            2
+        };
     }
     // Annn - Sets register I equal to nnn.
-    fn ld_i_nnn(&mut self, instruction: u16) {
-        let nnn: u16 = instruction & 0x0FFF;
-
+    fn set_i_to_address(&mut self, address: u16) {
+        self.i_register = address;
         self.pc += 2;
-        self.i_register = nnn;
     }
     // Bnnn - Sets program counter equal to nnn + V0
-    fn jmp_v0_nnn(&mut self, instruction: u16) {
-        let nnn = instruction & 0x0FFF;
-        self.pc = nnn + self.gp_registers[0] as u16;
+    fn jump_to_address_plus_v0(&mut self, address: u16) {
+        self.pc = address + self.v_registers[0] as u16;
     }
     // Cxkk - Sets Vx = kk & random byte.
-    fn rnd_vx_kk(&mut self, instruction: u16) {
+    fn set_vx_equals_rand(&mut self, x: usize, data: u8) {
         let rand: u8 = rand::random();
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-        let kk: u8 = (instruction & 0x00FF) as u8;
 
-        self.gp_registers[x] = kk & rand;
+        self.v_registers[x] = data & rand;
         self.pc += 2;
     }
     // This function is particularly ugly. Sorry.
     // Dxyn - Display an n-byte sprite starting at memory location I at coordinate (Vx, Vy) and set VF = collision
-    fn drw_vx_vy_n(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-        let y: usize = ((instruction & 0x00F0) >> 4) as usize;
+    fn draw_n_bytes_at_xy(&mut self, x: usize, y: usize, n: u16) {
         let f: usize = 0xF;
-        let n: u16 = instruction & 0x000F;
         let mut collision: bool = false;
         let sprite_size: usize = (self.i_register + n) as usize;
         let sprite_slice: &[u8] = &self.memory[self.i_register as usize..sprite_size];
@@ -587,10 +522,10 @@ impl ChipEight {
 
         for i in 0..sprite.len() {
             // If a sprite's coordinates on screen go past the screen boundaries, the sprite should wrap to the other side.
-            let sy: usize = (self.gp_registers[y] as usize + i) % 32;
+            let sy: usize = (self.v_registers[y] as usize + i) % 32;
             for j in 0..8 as usize {
                 // Make sure to also wrap the x-axis.
-                let sx: usize = (self.gp_registers[x] as usize + j) % 64;
+                let sx: usize = (self.v_registers[x] as usize + j) % 64;
                 let current_pixel: bool = self.screen[sy][sx];
                 self.screen[sy][sx] ^= sprite[i][j];
                 // If current_pixel is true and self.screen[sy][sx] is false, then a collision occurred.
@@ -599,82 +534,57 @@ impl ChipEight {
                 }
             }
         }
-        self.gp_registers[f] = if collision { 1 } else { 0 };
+        self.v_registers[f] = if collision { 1 } else { 0 };
         self.pc += 2;
     }
     // Ex9E - Skip next instruction if key with the value of Vx is pressed.
-    fn skp_vx(&mut self, instruction: u16, pressed: u8) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-
-        //println!("pressed = {}", pressed);
-        if self.gp_registers[x] == pressed {
-            self.pc += 4;
-        } else {
-            self.pc += 2;
-        }
+    fn skip_if_vx_pressed(&mut self, x: usize, pressed: u8) {
+        self.pc += if self.v_registers[x] == pressed { 4 } else { 2 };
     }
     // ExA1 - Skip next instruction if key with the value of Vx is not pressed.
-    fn sknp_vx(&mut self, instruction: u16, pressed: u8) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-
-        if self.gp_registers[x] != pressed {
-            self.pc += 4;
-        } else {
-            self.pc += 2;
-        }
+    fn skip_if_vx_not_pressed(&mut self, x: usize, pressed: u8) {
+        self.pc += if self.v_registers[x] != pressed { 4 } else { 2 };
     }
     // Fx07 - Set Vx = delay_timer.
-    fn ld_vx_dt(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-
-        self.gp_registers[x] = self.delay_timer;
+    fn set_vx_equals_delay(&mut self, x: usize) {
+        self.v_registers[x] = self.delay_timer;
         self.pc += 2;
     }
     // Fx0A - Wait for a key press, then store the value of the key in Vx.
-    fn ld_vx_key(&mut self, instruction: u16, pressed: u8) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-
+    fn set_vx_equals_key(&mut self, x: usize, pressed: u8) {
         if pressed != 0x10 {
-            self.gp_registers[x] = pressed;
+            self.v_registers[x] = pressed;
             self.pc += 2;
         }
     }
     // Fx15 - Set delay_timer = Vx.
-    fn ld_dt_vx(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-
-        self.delay_timer = self.gp_registers[x];
+    fn set_delay_equals_vx(&mut self, x: usize) {
+        self.delay_timer = self.v_registers[x];
         self.pc += 2;
     }
     // Fx18 - Set sound_timer = Vx.
-    fn ld_st_vx(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-
-        self.sound_timer = self.gp_registers[x];
+    fn set_sound_equals_vx(&mut self, x: usize) {
+        self.sound_timer = self.v_registers[x];
         self.pc += 2;
     }
     // Fx1E - Set I = I + Vx.
-    fn add_i_vx(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-
-        self.i_register += self.gp_registers[x] as u16;
+    fn add_assign_vx_to_i(&mut self, x: usize) {
+        self.i_register += self.v_registers[x] as u16;
         self.pc += 2;
     }
     // Fx29 - Set I to the location of the hexadecimal sprite corresponding to the value of Vx.
-    fn ld_f_vx(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
+    fn set_i_to_sprite(&mut self, x: usize) {
         // The hexadecimal sprites are 8x5, so we multiply the value of Vx by 5 to get the index of the sprite
-        let i: u16 = (self.gp_registers[x] * 5) as u16;
+        let i: u16 = (self.v_registers[x] * 5) as u16;
 
         self.i_register = i;
         self.pc += 2;
     }
     // Fx33 - Store the BCD representation of Vx in I, I+1, and I+2. The hundreds place is stored in I, tens in I+1, and ones in I+2.
-    fn ld_b_vx(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
-        let hundreds: u8 = self.gp_registers[x] / 100;
-        let tens: u8 = (self.gp_registers[x] / 10) % 10;
-        let ones: u8 = self.gp_registers[x] % 10;
+    fn set_i_to_bcd(&mut self, x: usize) {
+        let hundreds: u8 = self.v_registers[x] / 100;
+        let tens: u8 = (self.v_registers[x] / 10) % 10;
+        let ones: u8 = self.v_registers[x] % 10;
         let idx: usize = self.i_register as usize;
 
         self.memory[idx] = hundreds;
@@ -683,22 +593,20 @@ impl ChipEight {
         self.pc += 2;
     }
     // Fx55 - Store the values in registers V0 - Vx in memory starting at location I.
-    fn ld_i_vx(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
+    fn store_v_registers(&mut self, x: usize) {
         let idx: usize = self.i_register as usize;
 
         for i in 0..=x {
-            self.memory[idx + i] = self.gp_registers[i];
+            self.memory[idx + i] = self.v_registers[i];
         }
         self.pc += 2;
     }
     // Fx65 - Read values from memory starting at location I and store them in registers V0 - Vx.
-    fn ld_vx_i(&mut self, instruction: u16) {
-        let x: usize = ((instruction & 0x0F00) >> 8) as usize;
+    fn restore_v_registers(&mut self, x: usize) {
         let idx: usize = self.i_register as usize;
 
         for i in 0..=x {
-            self.gp_registers[i] = self.memory[idx + i];
+            self.v_registers[i] = self.memory[idx + i];
         }
         self.pc += 2;
     }
