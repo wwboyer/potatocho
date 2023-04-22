@@ -1,6 +1,7 @@
 use potatocho::ChipEight;
 use rfd::FileDialog;
 
+// This function is lifted entirely from the rust-sdl2 github page https://github.com/Rust-SDL2/rust-sdl2
 fn find_sdl_gl_driver() -> Option<u32> {
     for (i, item) in sdl2::render::drivers().enumerate() {
         if item.name == "opengl" {

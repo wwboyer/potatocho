@@ -1,4 +1,5 @@
 use sdl2::audio::{AudioCallback, AudioSpecDesired};
+use std::collections::HashSet;
 
 // The audio code is pretty much lifted 1:1 from the SDL2 crate's audio example code: https://rust-sdl2.github.io/rust-sdl2/sdl2/audio/index.html
 struct SquareWave {
@@ -10,7 +11,7 @@ struct SquareWave {
 impl AudioCallback for SquareWave {
     type Channel = f32;
 
-    fn callback(&mut self, out: &mut [f32]) {
+    fn callback(&mut self, out: &mut [Self::Channel]) {
         for x in out.iter_mut() {
             *x = if self.phase <= 0.5 {
                 self.volume
@@ -105,6 +106,146 @@ impl ChipEight {
         }
         memory
     }
+    fn poll_input(pressed: &mut HashSet<u8>, event_pump: &mut sdl2::EventPump) -> i32 {
+        use sdl2::{event::Event, keyboard::Keycode};
+
+        let mut last_pressed = -1;
+        for event in event_pump.poll_iter() {
+            match event {
+                Event::Quit { .. }
+                | Event::KeyDown {
+                    keycode: Some(Keycode::Escape),
+                    ..
+                } => return 0x1B,
+                Event::KeyDown {
+                    keycode: Some(keycode),
+                    ..
+                } => match keycode {
+                    Keycode::Num1 => {
+                        pressed.insert(0x1);
+                        last_pressed = 0x1;
+                    }
+                    Keycode::Num2 => {
+                        pressed.insert(0x2);
+                        last_pressed = 0x2;
+                    }
+                    Keycode::Num3 => {
+                        pressed.insert(0x3);
+                        last_pressed = 0x3;
+                    }
+                    Keycode::Num4 => {
+                        pressed.insert(0xC);
+                        last_pressed = 0xC;
+                    }
+                    Keycode::Q => {
+                        pressed.insert(0x4);
+                        last_pressed = 0x4;
+                    }
+                    Keycode::W => {
+                        pressed.insert(0x5);
+                        last_pressed = 0x5;
+                    }
+                    Keycode::E => {
+                        pressed.insert(0x6);
+                        last_pressed = 0x6;
+                    }
+                    Keycode::R => {
+                        pressed.insert(0xD);
+                        last_pressed = 0xD;
+                    }
+                    Keycode::A => {
+                        pressed.insert(0x7);
+                        last_pressed = 0x7;
+                    }
+                    Keycode::S => {
+                        pressed.insert(0x8);
+                        last_pressed = 0x8;
+                    }
+                    Keycode::D => {
+                        pressed.insert(0x9);
+                        last_pressed = 0x9;
+                    }
+                    Keycode::F => {
+                        pressed.insert(0xE);
+                        last_pressed = 0xE;
+                    }
+                    Keycode::Z => {
+                        pressed.insert(0xA);
+                        last_pressed = 0xA;
+                    }
+                    Keycode::X => {
+                        pressed.insert(0x0);
+                        last_pressed = 0x0;
+                    }
+                    Keycode::C => {
+                        pressed.insert(0xB);
+                        last_pressed = 0xB;
+                    }
+                    Keycode::V => {
+                        pressed.insert(0xF);
+                        last_pressed = 0xF;
+                    }
+                    _ => {}
+                },
+                Event::KeyUp {
+                    keycode: Some(keycode),
+                    ..
+                } => match keycode {
+                    Keycode::Num1 => {
+                        pressed.remove(&0x1);
+                    }
+                    Keycode::Num2 => {
+                        pressed.remove(&0x2);
+                    }
+                    Keycode::Num3 => {
+                        pressed.remove(&0x3);
+                    }
+                    Keycode::Num4 => {
+                        pressed.remove(&0xC);
+                    }
+                    Keycode::Q => {
+                        pressed.remove(&0x4);
+                    }
+                    Keycode::W => {
+                        pressed.remove(&0x5);
+                    }
+                    Keycode::E => {
+                        pressed.remove(&0x6);
+                    }
+                    Keycode::R => {
+                        pressed.remove(&0xD);
+                    }
+                    Keycode::A => {
+                        pressed.remove(&0x7);
+                    }
+                    Keycode::S => {
+                        pressed.remove(&0x8);
+                    }
+                    Keycode::D => {
+                        pressed.remove(&0x9);
+                    }
+                    Keycode::F => {
+                        pressed.remove(&0xE);
+                    }
+                    Keycode::Z => {
+                        pressed.remove(&0xA);
+                    }
+                    Keycode::X => {
+                        pressed.remove(&0x0);
+                    }
+                    Keycode::C => {
+                        pressed.remove(&0xB);
+                    }
+                    Keycode::V => {
+                        pressed.remove(&0xF);
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        last_pressed
+    }
     pub fn load_program(&mut self, program: Vec<u8>) {
         use std::collections::VecDeque;
 
@@ -125,7 +266,7 @@ impl ChipEight {
         mut canvas: sdl2::render::Canvas<sdl2::video::Window>,
         sdl_context: sdl2::Sdl,
     ) {
-        use sdl2::{event::Event, keyboard::Keycode, pixels::Color, rect::Rect};
+        use sdl2::{pixels::Color, rect::Rect};
 
         let audio_subsystem = match sdl_context.audio() {
             Ok(audio) => {
@@ -135,6 +276,7 @@ impl ChipEight {
             Err(e) => panic!("Error creating sdl audiocontext: {:?}", e),
         };
 
+        // Set up the audio subsystem with 44.1KHz mono playback
         let desired_spec = AudioSpecDesired {
             freq: Some(44100),
             channels: Some(1),
@@ -167,7 +309,7 @@ impl ChipEight {
             Err(e) => panic!("Error creating sdl context event pump: {:?}", e),
         };
 
-        let mut pressed: u8 = 0x10;
+        let mut pressed: HashSet<u8> = HashSet::new();
         'running: loop {
             for (y, row) in self.screen.iter().enumerate() {
                 for (x, pixel) in row.iter().enumerate() {
@@ -183,72 +325,11 @@ impl ChipEight {
                     };
                 }
             }
-            for event in event_pump.poll_iter() {
-                match event {
-                    Event::Quit { .. }
-                    | Event::KeyDown {
-                        keycode: Some(Keycode::Escape),
-                        ..
-                    } => break 'running,
-                    Event::KeyDown {
-                        keycode: Some(keycode),
-                        ..
-                    } => match keycode {
-                        Keycode::Num1 => {
-                            pressed = 0x1;
-                        }
-                        Keycode::Num2 => {
-                            pressed = 0x2;
-                        }
-                        Keycode::Num3 => {
-                            pressed = 0x3;
-                        }
-                        Keycode::Num4 => {
-                            pressed = 0xC;
-                        }
-                        Keycode::Q => {
-                            pressed = 0x4;
-                        }
-                        Keycode::W => {
-                            pressed = 0x5;
-                        }
-                        Keycode::E => {
-                            pressed = 0x6;
-                        }
-                        Keycode::R => {
-                            pressed = 0xD;
-                        }
-                        Keycode::A => {
-                            pressed = 0x7;
-                        }
-                        Keycode::S => {
-                            pressed = 0x8;
-                        }
-                        Keycode::D => {
-                            pressed = 0x9;
-                        }
-                        Keycode::F => {
-                            pressed = 0xE;
-                        }
-                        Keycode::Z => {
-                            pressed = 0xA;
-                        }
-                        Keycode::X => {
-                            pressed = 0x0;
-                        }
-                        Keycode::C => {
-                            pressed = 0xB;
-                        }
-                        Keycode::V => {
-                            pressed = 0xF;
-                        }
-                        _ => {}
-                    },
-                    Event::KeyUp { .. } => {
-                        pressed = 0x10;
-                    }
-                    _ => {}
-                }
+
+            let key = Self::poll_input(&mut pressed, &mut event_pump);
+
+            if key == 0x1B {
+                break 'running;
             }
 
             let instruction: u16 = (self.memory[self.pc as usize] as u16) << 8
@@ -268,11 +349,16 @@ impl ChipEight {
                 0
             };
 
-            self.execute(instruction, pressed);
+            self.execute(instruction, &mut pressed, &mut event_pump);
             canvas.present();
         }
     }
-    fn execute(&mut self, instruction: u16, pressed: u8) {
+    fn execute(
+        &mut self,
+        instruction: u16,
+        pressed: &mut HashSet<u8>,
+        event_pump: &mut sdl2::EventPump,
+    ) {
         let top_nybble: u16 = instruction >> 12;
         // These are usize because the second and third nybbles are pretty much exclusively used to access registers Vx and Vy respectively
         let second_nybble: usize = ((instruction & 0x0F00) >> 8) as usize;
@@ -319,7 +405,7 @@ impl ChipEight {
             },
             0xF => match bottom_byte {
                 0x07 => self.set_vx_equals_delay(second_nybble),
-                0x0A => self.set_vx_equals_key(second_nybble, pressed),
+                0x0A => self.set_vx_equals_key(second_nybble, pressed, event_pump),
                 0x15 => self.set_delay_equals_vx(second_nybble),
                 0x18 => self.set_sound_equals_vx(second_nybble),
                 0x1E => self.add_assign_vx_to_i(second_nybble),
@@ -538,12 +624,20 @@ impl ChipEight {
         self.pc += 2;
     }
     // Ex9E - Skip next instruction if key with the value of Vx is pressed.
-    fn skip_if_vx_pressed(&mut self, x: usize, pressed: u8) {
-        self.pc += if self.v_registers[x] == pressed { 4 } else { 2 };
+    fn skip_if_vx_pressed(&mut self, x: usize, pressed: &HashSet<u8>) {
+        self.pc += if pressed.contains(&self.v_registers[x]) {
+            4
+        } else {
+            2
+        };
     }
     // ExA1 - Skip next instruction if key with the value of Vx is not pressed.
-    fn skip_if_vx_not_pressed(&mut self, x: usize, pressed: u8) {
-        self.pc += if self.v_registers[x] != pressed { 4 } else { 2 };
+    fn skip_if_vx_not_pressed(&mut self, x: usize, pressed: &HashSet<u8>) {
+        self.pc += if !pressed.contains(&self.v_registers[x]) {
+            4
+        } else {
+            2
+        };
     }
     // Fx07 - Set Vx = delay_timer.
     fn set_vx_equals_delay(&mut self, x: usize) {
@@ -551,11 +645,25 @@ impl ChipEight {
         self.pc += 2;
     }
     // Fx0A - Wait for a key press, then store the value of the key in Vx.
-    fn set_vx_equals_key(&mut self, x: usize, pressed: u8) {
-        if pressed != 0x10 {
-            self.v_registers[x] = pressed;
-            self.pc += 2;
-        }
+    fn set_vx_equals_key(
+        &mut self,
+        x: usize,
+        pressed: &mut HashSet<u8>,
+        event_pump: &mut sdl2::EventPump,
+    ) {
+        let key = loop {
+            let key = Self::poll_input(pressed, event_pump);
+
+            if key == 0x1B {
+                // This probably isn't the best idea but oh well ¯\_(ツ)_/¯
+                std::process::exit(0);
+            } else if !(key == -1) {
+                break key;
+            }
+        };
+
+        self.v_registers[x] = key as u8;
+        self.pc += 2;
     }
     // Fx15 - Set delay_timer = Vx.
     fn set_delay_equals_vx(&mut self, x: usize) {
